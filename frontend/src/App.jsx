@@ -6,16 +6,16 @@ function App() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
-const [name, setName] = useState('')
-const [email, setEmail] = useState('')
-const [submitting, setSubmitting] = useState(false)
+  const [name, setName] = useState('')
+  const [email, setEmail] = useState('')
+  const [submitting, setSubmitting] = useState(false)
 
-const [editingId, setEditingId] = useState(null)
-const [editName, setEditName] = useState('')
-const [editEmail, setEditEmail] = useState('')
+  const [editingId, setEditingId] = useState(null)
+  const [editName, setEditName] = useState('')
+  const [editEmail, setEditEmail] = useState('')
 
   useEffect(() => {
-    fetch('http://localhost:3001/users')
+    fetch('/api/users')
       .then((response) => {
         if (!response.ok) {
           throw new Error(`HTTP error: ${response.status}`)
@@ -34,100 +34,100 @@ const [editEmail, setEditEmail] = useState('')
       })
   }, [])
 
-const handleSubmit = async (event) => {
-  event.preventDefault()
+  const handleSubmit = async (event) => {
+    event.preventDefault()
 
-  setSubmitting(true)
-  setError(null)
+    setSubmitting(true)
+    setError(null)
 
-  try {
-    const response = await fetch('http://localhost:3001/users', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        name,
-        email,
-      }),
-    })
+    try {
+      const response = await fetch('/api/users', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name,
+          email,
+        }),
+      })
 
-    if (!response.ok) {
-      throw new Error(`HTTP error: ${response.status}`)
+      if (!response.ok) {
+        throw new Error(`HTTP error: ${response.status}`)
+      }
+
+      const newUser = await response.json()
+
+      setUsers((currentUsers) => [...currentUsers, newUser])
+      setName('')
+      setEmail('')
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSubmitting(false)
     }
-
-    const newUser = await response.json()
-
-    setUsers((currentUsers) => [...currentUsers, newUser])
-    setName('')
-    setEmail('')
-  } catch (err) {
-    setError(err.message)
-  } finally {
-    setSubmitting(false)
   }
-}
 
-const startEdit = (user) => {
-  setEditingId(user.id)
-  setEditName(user.name)
-  setEditEmail(user.email)
-}
+  const startEdit = (user) => {
+    setEditingId(user.id)
+    setEditName(user.name)
+    setEditEmail(user.email)
+  }
 
-const handleUpdate = async (id) => {
-  setError(null)
+  const handleUpdate = async (id) => {
+    setError(null)
 
-  try {
-    const response = await fetch(`http://localhost:3001/users/${id}`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        name: editName,
-        email: editEmail,
-      }),
-    })
+    try {
+      const response = await fetch(`/api/users/${id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: editName,
+          email: editEmail,
+        }),
+      })
 
-    if (!response.ok) {
-      throw new Error(`HTTP error: ${response.status}`)
-    }
+      if (!response.ok) {
+        throw new Error(`HTTP error: ${response.status}`)
+      }
 
-    const updatedUser = await response.json()
+      const updatedUser = await response.json()
 
-    setUsers((currentUsers) =>
-      currentUsers.map((user) =>
-        user.id === id ? updatedUser : user
+      setUsers((currentUsers) =>
+        currentUsers.map((user) =>
+          user.id === id ? updatedUser : user
+        )
       )
-    )
 
-    setEditingId(null)
-    setEditName('')
-    setEditEmail('')
-  } catch (err) {
-    setError(err.message)
-  }
-}
-
-const handleDelete = async (id) => {
-  setError(null)
-
-  try {
-    const response = await fetch(`http://localhost:3001/users/${id}`, {
-      method: 'DELETE',
-    })
-
-    if (!response.ok) {
-      throw new Error(`HTTP error: ${response.status}`)
+      setEditingId(null)
+      setEditName('')
+      setEditEmail('')
+    } catch (err) {
+      setError(err.message)
     }
-
-    setUsers((currentUsers) =>
-      currentUsers.filter((user) => user.id !== id)
-    )
-  } catch (err) {
-    setError(err.message)
   }
-}
+
+  const handleDelete = async (id) => {
+    setError(null)
+
+    try {
+      const response = await fetch(`/api/users/${id}`, {
+        method: 'DELETE',
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP error: ${response.status}`)
+      }
+
+      setUsers((currentUsers) =>
+        currentUsers.filter((user) => user.id !== id)
+      )
+    } catch (err) {
+      setError(err.message)
+    }
+  }
 
   if (loading) {
     return <h1>Loading users...</h1>
@@ -140,6 +140,7 @@ const handleDelete = async (id) => {
   return (
     <main>
       <h1>Users</h1>
+
       <form onSubmit={handleSubmit}>
         <div>
           <label>
@@ -169,51 +170,52 @@ const handleDelete = async (id) => {
           {submitting ? 'Adding...' : 'Add User'}
         </button>
       </form>
-{users.map((user) => (
-  <div key={user.id}>
-    {editingId === user.id ? (
-      <>
-        <input
-          type="text"
-          value={editName}
-          onChange={(event) => setEditName(event.target.value)}
-        />
 
-        <input
-          type="email"
-          value={editEmail}
-          onChange={(event) => setEditEmail(event.target.value)}
-        />
+      {users.map((user) => (
+        <div key={user.id}>
+          {editingId === user.id ? (
+            <>
+              <input
+                type="text"
+                value={editName}
+                onChange={(event) => setEditName(event.target.value)}
+              />
 
-<button
-  type="button"
-  onClick={() => handleUpdate(user.id)}
->
-  Save
-</button>
-      </>
-    ) : (
-      <>
-        <h2>{user.name}</h2>
-        <p>{user.email}</p>
+              <input
+                type="email"
+                value={editEmail}
+                onChange={(event) => setEditEmail(event.target.value)}
+              />
 
-        <button
-          type="button"
-          onClick={() => startEdit(user)}
-        >
-          Edit
-        </button>
+              <button
+                type="button"
+                onClick={() => handleUpdate(user.id)}
+              >
+                Save
+              </button>
+            </>
+          ) : (
+            <>
+              <h2>{user.name}</h2>
+              <p>{user.email}</p>
 
-        <button
-          type="button"
-          onClick={() => handleDelete(user.id)}
-        >
-          Delete
-        </button>
-      </>
-    )}
-  </div>
-))}
+              <button
+                type="button"
+                onClick={() => startEdit(user)}
+              >
+                Edit
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleDelete(user.id)}
+              >
+                Delete
+              </button>
+            </>
+          )}
+        </div>
+      ))}
     </main>
   )
 }

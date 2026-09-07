@@ -123,3 +123,26 @@ jobs:
       - name: Cleanup integration environment
         if: always()
         run: docker compose down -v
+
+  image-build:
+    needs: integration
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build backend Docker image
+        run: |
+          docker build \
+            --file backend/Dockerfile \
+            --tag fullstack-backend:ci \
+            backend
+
+      - name: Inspect backend Docker image
+        run: |
+          docker image inspect fullstack-backend:ci
+
+      - name: Show backend image
+        run: |
+          docker image ls fullstack-backend:ci

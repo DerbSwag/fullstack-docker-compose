@@ -59,3 +59,67 @@ jobs:
           name: frontend-dist
           path: frontend/dist/
           if-no-files-found: error
+
+  integration:
+    needs: validate
+    runs-on: ubuntu-latest
+
+    env:
+      MYSQL_ROOT_PASSWORD: ci_root_password
+      MYSQL_DATABASE: fullstack
+      MYSQL_USER: ci_user
+      MYSQL_PASSWORD: ci_password
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Start MySQL and backend
+        run: docker compose up -d mysql backend
+
+      - name: Show container status
+        run: docker compose ps
+
+      - name: Wait for backend to become healthy
+        shell: bash
+        run: |
+          for i in {1..30}; do
+            STATUS="$(docker inspect --format='{{.State.Health.Status}}' fullstack-backend 2>/dev/null || true)"
+
+            echo "Backend health status: ${STATUS:-unknown}"
+
+            if [ "$STATUS" = "healthy" ]; then
+              exit 0
+            fi
+
+            if [ "$STATUS" = "unhealthy" ]; then
+              docker compose ps
+              docker compose logs mysql backend
+              exit 1
+            fi
+
+            sleep 5
+          done
+
+          echo "Backend did not become healthy in time."
+          docker compose ps
+          docker compose logs mysql backend
+          exit 1
+
+      - name: Check backend health endpoint
+        run: |
+          curl --fail --show-error --silent \
+            http://127.0.0.1:3001/health
+
+      - name: Check users API
+        run: |
+          curl --fail --show-error --silent \
+            http://127.0.0.1:3001/users
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs mysql backend
+
+      - name: Cleanup integration environment
+        if: always()
+        run: docker compose down -v

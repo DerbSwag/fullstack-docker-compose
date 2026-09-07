@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: read
+  packages: write
 
 jobs:
   validate:
@@ -146,3 +147,32 @@ jobs:
       - name: Show backend image
         run: |
           docker image ls fullstack-backend:ci
+
+  image-publish:
+    needs: image-build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push backend image
+        run: |
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/fullstack-backend:${GITHUB_SHA}"
+
+          echo "Building: $IMAGE"
+
+          docker build \
+            --file backend/Dockerfile \
+            --tag "$IMAGE" \
+            backend
+
+          docker push "$IMAGE"

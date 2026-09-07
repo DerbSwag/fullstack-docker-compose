@@ -104,31 +104,46 @@ This is a release-pointer rollback, not a database rollback. MySQL data is persi
 
 ```text
 .
-â”œâ”€â”€ backend/
-â”‚   â”œâ”€â”€ Dockerfile
-â”‚   â”œâ”€â”€ index.js
-â”‚   â”œâ”€â”€ package.json
-â”‚   â””â”€â”€ package-lock.json
-â”œâ”€â”€ frontend/
-â”‚   â”œâ”€â”€ Dockerfile
-â”‚   â”œâ”€â”€ index.html
-â”‚   â”œâ”€â”€ package.json
-â”‚   â”œâ”€â”€ package-lock.json
-â”‚   â”œâ”€â”€ vite.config.js
-â”‚   â””â”€â”€ src/
-â”œâ”€â”€ mysql/
-â”‚   â””â”€â”€ init.sql
-â”œâ”€â”€ scripts/
-â”‚   â””â”€â”€ deploy-frontend.sh
-â”œâ”€â”€ docker-compose.yml
-â”œâ”€â”€ .env.example
-â”œâ”€â”€ LICENSE
-â””â”€â”€ README.md
+├── backend/
+│   ├── Dockerfile
+│   ├── index.js                 # Process entry point and graceful shutdown
+│   ├── package.json
+│   ├── package-lock.json
+│   └── src/
+│       ├── app.js               # Express app and health endpoint
+│       ├── db.js                # MySQL pool factory
+│       ├── http.js              # Request validation and error helpers
+│       └── routes/
+│           └── users.js          # User CRUD routes
+├── frontend/
+│   ├── Dockerfile
+│   ├── index.html
+│   ├── package.json
+│   ├── package-lock.json
+│   ├── vite.config.js
+│   └── src/
+│       ├── api/
+│       │   └── users.js          # Browser API client
+│       ├── components/
+│       │   ├── UserForm.jsx
+│       │   └── UserList.jsx
+│       ├── App.jsx
+│       ├── App.css
+│       ├── index.css
+│       └── main.jsx
+├── mysql/
+│   └── init.sql                  # Initial schema and sample data
+├── scripts/
+│   └── deploy-frontend.sh        # Build, release, switch, and rollback
+├── docker-compose.yml             # Backend, MySQL, and phpMyAdmin services
+├── .env.example                  # Runtime configuration template
+├── LICENSE
+└── README.md
 ```
 
-The backend entry point is `backend/index.js`. Runtime composition is split into `backend/src/app.js`, `backend/src/db.js`, `backend/src/http.js`, and `backend/src/routes/users.js`. The frontend interaction layer is split between `frontend/src/api/users.js`, `frontend/src/components/UserForm.jsx`, and `frontend/src/components/UserList.jsx`.
+The backend entry point is `backend/index.js`. Runtime composition is separated into the Express app, database pool, HTTP helpers, and user route module. The frontend interaction layer is separated into the API client, form component, and user list component.
 
-`frontend/vite.config.js` defines the build tool and local development server settings. The production deployment path uses `npm run build` and serves the resulting static output through Nginx; it does not use the Vite development server.
+`frontend/vite.config.js` defines the build tool and local development server settings. The production deployment path uses `npm run build` and serves the resulting static output through host-level Nginx; it does not use the Vite development server.
 
 ## Services and API
 

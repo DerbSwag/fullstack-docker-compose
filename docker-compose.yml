@@ -53,19 +53,6 @@ services:
     networks:
       - fullstack-network
 
-  frontend:
-    build:
-      context: ./frontend
-    image: fullstack-frontend:0.1
-    container_name: fullstack-frontend
-    restart: unless-stopped
-
-    ports:
-      - "127.0.0.1:3000:3000"
-
-    networks:
-      - fullstack-network
-
   phpmyadmin:
     image: phpmyadmin:latest
     container_name: fullstack-phpmyadmin

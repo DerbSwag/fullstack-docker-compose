@@ -64,6 +64,12 @@ jobs:
     needs: validate
     runs-on: ubuntu-latest
 
+    env:
+      MYSQL_ROOT_PASSWORD: ci_root_password
+      MYSQL_DATABASE: fullstack_ci
+      MYSQL_USER: ci_user
+      MYSQL_PASSWORD: ci_password
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

@@ -42,27 +42,51 @@ jobs:
 
               echo
               echo "===== DIRECT DOCKER MUST BE DENIED ====="
-              if docker info >/dev/null 2>&1; then
-                echo "ERROR: direct Docker access is unexpectedly allowed"
+
+              if [ ! -S /var/run/docker.sock ]; then
+                echo "ERROR: Docker socket is missing; cannot validate authorization boundary"
                 exit 1
               fi
-              echo "direct Docker: DENIED (expected)"
+
+              DOCKER_ERROR=$(docker info 2>&1 >/dev/null) && {
+                echo "ERROR: direct Docker access is unexpectedly allowed"
+                exit 1
+              }
+
+              case "$DOCKER_ERROR" in
+                *"permission denied"*)
+                  echo "direct Docker: DENIED by socket permission (expected)"
+                  ;;
+                *)
+                  echo "ERROR: Docker failed for a reason other than permission denial"
+                  echo "$DOCKER_ERROR"
+                  exit 1
+                  ;;
+              esac
 
               echo
               echo "===== SUDO DOCKER MUST BE DENIED ====="
-              if sudo -n docker ps >/dev/null 2>&1; then
-                echo "ERROR: sudo docker is unexpectedly allowed"
+
+              DOCKER_BIN=$(command -v docker) || {
+                echo "ERROR: docker CLI not found"
+                exit 1
+              }
+
+              echo "Docker CLI: $DOCKER_BIN"
+
+              if sudo -n -l "$DOCKER_BIN" ps >/dev/null 2>&1; then
+                echo "ERROR: sudo policy unexpectedly allows docker"
                 exit 1
               fi
-              echo "sudo docker: DENIED (expected)"
+              echo "sudo docker policy: DENIED (expected)"
 
               echo
               echo "===== SUDO SHELL MUST BE DENIED ====="
-              if sudo -n /bin/bash -c true >/dev/null 2>&1; then
-                echo "ERROR: sudo shell is unexpectedly allowed"
+              if sudo -n -l /bin/bash -c true >/dev/null 2>&1; then
+                echo "ERROR: sudo policy unexpectedly allows shell"
                 exit 1
               fi
-              echo "sudo shell: DENIED (expected)"
+              echo "sudo shell policy: DENIED (expected)"
 
               echo
               echo "===== DEPLOY SUDO POLICY ====="

@@ -16,6 +16,9 @@ jobs:
   validate:
     runs-on: ubuntu-latest
 
+    env:
+      BACKEND_IMAGE: fullstack-backend:ci
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -70,10 +73,18 @@ jobs:
       MYSQL_DATABASE: fullstack
       MYSQL_USER: ci_user
       MYSQL_PASSWORD: ci_password
+      BACKEND_IMAGE: fullstack-backend:ci
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Build backend image from PR source
+        run: |
+          docker build \
+            --file backend/Dockerfile \
+            --tag fullstack-backend:ci \
+            backend
 
       - name: Start MySQL and backend
         run: docker compose up -d mysql backend

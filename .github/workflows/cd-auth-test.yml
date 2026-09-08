@@ -1,0 +1,54 @@
+name: CD Auth Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  auth-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/487124860968/locations/global/workloadIdentityPools/github-actions/providers/github
+          service_account: github-deploy@devopslab-504414.iam.gserviceaccount.com
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Test IAP + OS Login
+        run: |
+          gcloud compute ssh devops-recovery \
+            --project=devopslab-504414 \
+            --zone=asia-southeast1-c \
+            --tunnel-through-iap \
+            --quiet \
+            --command='
+              echo "SSH: PASS"
+              echo "USER:"
+              whoami
+              echo
+              echo "HOST:"
+              hostname
+              echo
+              echo "IDENTITY:"
+              id
+              echo
+              echo "DOCKER:"
+              docker info >/dev/null 2>&1 \
+                && echo "docker access: PASS" \
+                || echo "docker access: FAIL"
+              echo
+              echo "SUDO:"
+              sudo -n true >/dev/null 2>&1 \
+                && echo "sudo: PASS" \
+                || echo "sudo: unavailable"
+            '

@@ -191,6 +191,10 @@ jobs:
 
   deploy:
     needs: image-publish
+    concurrency:
+      group: production-backend
+      cancel-in-progress: false
+      queue: max
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 

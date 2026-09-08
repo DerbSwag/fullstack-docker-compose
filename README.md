@@ -25,6 +25,8 @@ This repository is **not a claim of complete production readiness**. It demonstr
 - SSH transport through Google Cloud IAP with OS Login.
 - A tested privilege boundary that denies direct Docker access, `sudo docker`, and `sudo` shell escalation to the deployment identity.
 - Deployment through a restricted trusted entrypoint using an exact 40-character Git SHA.
+- Production deployment serialization prevents overlapping backend deployments.
+- The trusted backend deployment source includes a latest-`main` admission check so superseded SHAs can be skipped before production mutation.
 - Backend health validation and automatic rollback to the previous image on deployment failure.
 - Frontend static builds promoted through timestamped releases with atomic symlink activation and automatic rollback.
 - Host-level Nginx serving the active frontend release and reverse-proxying `/api/` to the backend.
@@ -161,18 +163,28 @@ The tested end-to-end deployment promoted the merge-commit SHA image, recreated 
 
 ## Backend Deployment and Rollback
 
-The repository contains `scripts/deploy-backend.sh`, which implements the backend deployment transaction. On the deployment host, the trusted root-owned entrypoint invokes the reviewed deployment logic under a restricted sudo policy.
+The production backend deployment entrypoint is maintained in the repository as `ops/fullstack-deploy-backend`. A reviewed copy is installed on the deployment host as the root-owned `/usr/local/sbin/fullstack-deploy-backend` and operates against the root-controlled deployment state under `/etc/fullstack-deploy`.
 
-The script accepts exactly one argument and validates it as a 40-character hexadecimal Git SHA:
+This keeps the version-controlled source reviewable without allowing the deployment identity to modify the privileged installed copy. The repository also retains `scripts/deploy-backend.sh` as the non-privileged repository deployment helper; it is not the production sudo entrypoint.
+
+The trusted entrypoint accepts exactly one argument and validates it as a 40-character hexadecimal Git SHA:
 
 ```bash
-scripts/deploy-backend.sh <40-character-git-sha>
+sudo -n /usr/local/sbin/fullstack-deploy-backend <40-character-git-sha>
 ```
 
 Deployment sequence:
 
 ```text
-validate SHA and prerequisites
+validate SHA
+        ↓
+resolve authoritative GitHub refs/heads/main
+        ↓
+requested SHA == latest main?
+        ├── no  → skip stale deployment before production mutation
+        └── yes → continue
+        ↓
+validate deployment prerequisites
         ↓
 read currently running image
         ↓
@@ -357,9 +369,11 @@ phpMyAdmin uses `PMA_HOST=mysql` and `PMA_PORT=3306`. It is published only on `1
 |   `-- src/
 |-- mysql/
 |   `-- init.sql
+|-- ops/
+|   `-- fullstack-deploy-backend       # source for the trusted production deploy entrypoint
 |-- scripts/
-|   |-- deploy-backend.sh             # immutable image deployment + rollback logic
-|   `-- deploy-frontend.sh            # atomic static release + rollback logic
+|   |-- deploy-backend.sh              # repository-level backend deployment helper
+|   `-- deploy-frontend.sh             # atomic static release + rollback logic
 |-- docker-compose.yml
 |-- .env.example
 |-- LICENSE
@@ -487,7 +501,7 @@ This lab intentionally does **not** describe itself as a fully hardened Internet
 - no automated database backup/restore pipeline
 - no full backend unit/integration test suite beyond the service-level CI checks
 - no frontend component or end-to-end test suite
-- no deployment concurrency/serialization protection yet
+- no multi-run cancellation; production backend deployments are serialized rather than interrupted in progress
 - no image vulnerability scan, SBOM, or signing/attestation stage yet
 - no canary or multi-instance traffic-shifting strategy
 
@@ -495,7 +509,7 @@ This lab intentionally does **not** describe itself as a fully hardened Internet
 
 Next improvements are intentionally separated from completed capabilities:
 
-1. Add deployment concurrency protection to prevent overlapping production deploys.
+1. Complete controlled production verification of latest-`main` stale-deployment protection.
 2. Move workflow permissions toward tighter per-job least privilege where practical.
 3. Add backend automated tests and frontend component/E2E tests.
 4. Add container vulnerability scanning and generate an SBOM.

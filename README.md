@@ -1,68 +1,221 @@
-﻿# Full-Stack Docker Compose Deployment Lab
+# Full-Stack DevOps Deployment Lab
 
+[![CI](https://github.com/DerbSwag/fullstack-docker-compose/actions/workflows/ci.yml/badge.svg)](https://github.com/DerbSwag/fullstack-docker-compose/actions/workflows/ci.yml)
 [![Docker Compose](https://img.shields.io/badge/Docker%20Compose-v2-2496ED?logo=docker&logoColor=white)](https://docs.docker.com/compose/)
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=20232A)](https://react.dev/)
 [![Express](https://img.shields.io/badge/Express-5-000000?logo=express&logoColor=white)](https://expressjs.com/)
 [![MySQL](https://img.shields.io/badge/MySQL-9.7.2-4479A1?logo=mysql&logoColor=white)](https://www.mysql.com/)
 [![Nginx](https://img.shields.io/badge/Nginx-host--level-009639?logo=nginx&logoColor=white)](https://nginx.org/)
+[![GHCR](https://img.shields.io/badge/GHCR-immutable%20SHA%20images-181717?logo=github)](https://github.com/features/packages)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
 
-A compact full-stack CRUD application demonstrating release-oriented deployment on a Linux host. React is compiled into static assets, promoted through timestamped releases, and served by host-level Nginx. Express, MySQL, and phpMyAdmin remain Docker Compose services.
+A production-style DevOps portfolio lab built around a small React + Express + MySQL CRUD application. The application is intentionally simple so the repository can focus on delivery engineering: CI validation, integration testing, immutable container artifacts, secure GitHub-to-GCP authentication, least-privilege deployment, health validation, and rollback paths.
 
-This is a production-style portfolio lab, not a claim of complete production readiness. The repository includes build validation, atomic activation, health checks, and automatic frontend rollback. It does not include CI/CD, TLS, authentication, automated application tests, monitoring, or database backup automation.
+This repository is **not a claim of complete production readiness**. It demonstrates production-oriented controls that have been implemented and exercised in a lab environment, while documenting the remaining gaps explicitly.
 
-## Overview
+## What This Lab Demonstrates
 
-The application provides a React UI for user CRUD operations and an Express REST API backed by MySQL.
+- Pull-request CI with Docker Compose validation, dependency installation, frontend lint/build, and backend syntax validation.
+- Integration testing with a real MySQL container and the backend container running together.
+- Runtime checks against backend `/health` and `/users` endpoints.
+- Backend Docker image build validation before publication.
+- Immutable backend image publication to GHCR using the exact Git commit SHA as the image tag.
+- Automatic backend deployment after a successful push to `main`.
+- GitHub Actions authentication to Google Cloud with OIDC + Workload Identity Federation instead of a long-lived service-account key.
+- SSH transport through Google Cloud IAP with OS Login.
+- A tested privilege boundary that denies direct Docker access, `sudo docker`, and `sudo` shell escalation to the deployment identity.
+- Deployment through a restricted trusted entrypoint using an exact 40-character Git SHA.
+- Backend health validation and automatic rollback to the previous image on deployment failure.
+- Frontend static builds promoted through timestamped releases with atomic symlink activation and automatic rollback.
+- Host-level Nginx serving the active frontend release and reverse-proxying `/api/` to the backend.
 
-```text
-Browser
-  ---
-  ---
-Host-level Nginx
-  --------- /       --- active React release
-  --------- /api/* --- Express on 127.0.0.1:3001
-                         ---
-                         ---
-                       MySQL
-```
-
-phpMyAdmin is available on `127.0.0.1:8080`. MySQL is reachable by application services through the private Docker bridge network and is not published on a host port.
-
-## Architecture
+## System Architecture
 
 ```mermaid
 flowchart LR
     Browser[Browser]
-    subgraph Host[Linux host]
-        Nginx[Nginx<br/>HTTP entry point]
-        Current[current symlink<br/>/var/www/fullstack-compose/current]
-        Releases[Timestamped releases<br/>/var/www/fullstack-compose/releases/*]
+
+    subgraph Host[Linux / GCP VM]
+        Nginx[Nginx\nHTTP entry point]
+        Current[current symlink\n/var/www/fullstack-compose/current]
+        Releases[Timestamped frontend releases]
+
         subgraph Compose[Docker Compose]
-            API[Express API<br/>127.0.0.1:3001]
-            PMA[phpMyAdmin<br/>127.0.0.1:8080]
-            DB[(MySQL 9.7.2<br/>private bridge network)]
+            API[Express API\n127.0.0.1:3001]
+            PMA[phpMyAdmin\n127.0.0.1:8080]
+            DB[(MySQL 9.7.2\nprivate bridge network)]
         end
     end
-    Browser -->|HTTP or SSH tunnel| Nginx
+
+    Browser --> Nginx
     Nginx -->|/| Current
     Current -. resolves to .-> Releases
     Nginx -->|/api/*| API
-    API -->|mysql2 / mysql:3306| DB
+    API -->|mysql:3306| DB
     PMA -->|mysql:3306| DB
 ```
 
 | Component | Runtime | Responsibility |
 | --- | --- | --- |
-| React | Host filesystem under active release | Browser UI |
+| React | Host filesystem under the active release | Browser UI |
 | Nginx | Linux host | Static serving and API reverse proxy |
 | Express | Docker Compose | CRUD API and database access |
 | MySQL | Docker Compose | Persistent application data |
 | phpMyAdmin | Docker Compose | Database administration |
 
-The host Nginx site configuration is external to this repository. The operator must configure it to serve `current` and proxy `/api/` to `127.0.0.1:3001`.
+MySQL is not published on a host port. Backend and phpMyAdmin are bound to host loopback rather than exposed directly on all interfaces.
 
-## Deployment Flow
+## Delivery Architecture
+
+```mermaid
+flowchart TD
+    Dev[Developer] --> PR[Pull Request]
+    PR --> Validate[validate]
+    Validate --> Integration[integration]
+    Integration --> ImageBuild[image-build]
+
+    ImageBuild -->|PR| SkipPublish[image-publish skipped]
+    SkipPublish --> SkipDeploy[deploy skipped]
+
+    ImageBuild -->|push to main| Publish[image-publish]
+    Publish --> GHCR[GHCR\nfullstack-backend:GITHUB_SHA]
+    GHCR --> Deploy[deploy]
+    Deploy --> OIDC[GitHub OIDC]
+    OIDC --> WIF[Google Workload Identity Federation]
+    WIF --> IAP[IAP tunnel + OS Login]
+    IAP --> Sudo[restricted sudo]
+    Sudo --> Script[fullstack-deploy-backend GITHUB_SHA]
+    Script --> Health{Health checks pass?}
+    Health -->|yes| Success[Deployment success]
+    Health -->|no| Rollback[Rollback previous image]
+```
+
+The key invariant is that the image published by `image-publish` and the image requested by `deploy` use the **same immutable `GITHUB_SHA`**. The deployment path does not use a mutable `latest` tag.
+
+## CI/CD Pipeline
+
+The primary workflow is `.github/workflows/ci.yml`.
+
+| Event | `validate` | `integration` | `image-build` | `image-publish` | `deploy` |
+| --- | :---: | :---: | :---: | :---: | :---: |
+| Pull request to `main` | ✅ | ✅ | ✅ | ⏭️ | ⏭️ |
+| Push / merge to `main` | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+### `validate`
+
+The validation job performs:
+
+- `docker compose config`
+- Node.js 22 setup
+- `npm ci` for backend and frontend
+- backend syntax validation with `node --check`
+- frontend lint
+- frontend production build
+- validation that `frontend/dist/index.html` exists and is non-empty
+- upload of the frontend build artifact
+
+### `integration`
+
+The integration job builds the backend image from the checked-out revision, starts MySQL and backend with Docker Compose, waits for the backend Docker healthcheck, then verifies:
+
+```text
+GET http://127.0.0.1:3001/health
+GET http://127.0.0.1:3001/users
+```
+
+The temporary integration environment is removed with `docker compose down -v` after the job.
+
+This is a real service-level integration check, but it is **not** a complete automated application test suite. The backend package test script remains a placeholder and there are no frontend component/E2E tests yet.
+
+### `image-build`
+
+After integration succeeds, GitHub Actions builds and inspects the backend Docker image. This keeps Dockerfile/build failures separate from publication and deployment.
+
+### `image-publish`
+
+Publication runs only for a push to `main`:
+
+```text
+ghcr.io/derbswag/fullstack-backend:<40-character-Git-SHA>
+```
+
+The job authenticates to GHCR with the workflow `GITHUB_TOKEN`, builds the image, and pushes the immutable SHA tag.
+
+### `deploy`
+
+The deploy job depends on `image-publish`, so deployment cannot begin unless publication succeeds.
+
+The GitHub-hosted runner then:
+
+1. Authenticates to Google Cloud through GitHub OIDC and Workload Identity Federation.
+2. Configures `gcloud`.
+3. Opens an SSH connection through IAP to the deployment VM.
+4. Uses OS Login for the mapped deployment identity.
+5. Executes only the restricted deployment entrypoint:
+
+```bash
+sudo -n /usr/local/sbin/fullstack-deploy-backend "$GITHUB_SHA"
+```
+
+The tested end-to-end deployment promoted the merge-commit SHA image, recreated only the backend service, reached Docker health `healthy`, and passed direct API plus Nginx-path health checks.
+
+## Backend Deployment and Rollback
+
+The repository contains `scripts/deploy-backend.sh`, which implements the backend deployment transaction. On the deployment host, the trusted root-owned entrypoint invokes the reviewed deployment logic under a restricted sudo policy.
+
+The script accepts exactly one argument and validates it as a 40-character hexadecimal Git SHA:
+
+```bash
+scripts/deploy-backend.sh <40-character-git-sha>
+```
+
+Deployment sequence:
+
+```text
+validate SHA and prerequisites
+        ↓
+read currently running image
+        ↓
+pull GHCR target image:<SHA>
+        ↓
+validate Docker Compose configuration
+        ↓
+update BACKEND_IMAGE
+        ↓
+recreate backend only
+        ↓
+wait for Docker health
+        ↓
+check /health
+        ↓
+check /users
+        ↓
+check Nginx /api/health
+        ↓
+success
+```
+
+If the new backend fails to recreate cleanly, fails Docker health, or fails the post-deployment HTTP checks, the script restores the previous image and attempts to return the backend to a healthy state.
+
+The backend deployment does **not** roll back MySQL writes or schema/data changes. Database recovery is a separate failure domain.
+
+## Frontend Release Deployment
+
+The production frontend path uses `npm run build`; it does not run the Vite development server in production.
+
+`deploy-frontend.sh` creates timestamped releases under:
+
+```text
+/var/www/fullstack-compose/releases/YYYYMMDD-HHMMSS
+```
+
+Nginx serves through:
+
+```text
+/var/www/fullstack-compose/current
+```
+
+Deployment flow:
 
 ```mermaid
 flowchart TD
@@ -80,64 +233,65 @@ flowchart TD
     L --> M[Exit non-zero]
 ```
 
-## Release Strategy
-
-Releases are stored under:
-
-```text
-/var/www/fullstack-compose/releases/YYYYMMDD-HHMMSS
-```
-
-Nginx reads through:
-
-```text
-/var/www/fullstack-compose/current
-```
-
-The script builds from the checked-out revision, validates `frontend/dist/index.html`, copies the build into a new release, and switches the symlink with `mv -T`.
-
-This gives the deployment a clear release boundary:
+The release boundary is intentionally explicit:
 
 - Build output is prepared before activation.
-- A complete directory exists before Nginx can serve it.
-- The active version is auditable with `readlink -f`.
+- A complete release directory exists before Nginx serves it.
+- Activation is an atomic symlink replacement.
 - The previous release remains available as a recovery target.
 - Cleanup is not mixed into the deployment transaction.
 
-The script does not rebuild or recreate Express, MySQL, or phpMyAdmin. It does not delete old releases, prune Docker resources, or remove database data.
+After activation the script checks the frontend and API path. If validation fails, the previous release pointer is restored and the deployment exits non-zero.
 
-## Rollback Strategy
+## Security Model
 
-Rollback is a frontend release-pointer rollback. After activation, the script checks:
+The lab uses several layered controls rather than treating SSH access as unrestricted deployment authority.
 
-```bash
-curl -fsS -o /dev/null http://127.0.0.1/
-curl -fsS -o /dev/null http://127.0.0.1/api/users
+### GitHub to Google Cloud
+
+- GitHub Actions requests a short-lived OIDC token.
+- Google Cloud Workload Identity Federation exchanges that identity for Google credentials.
+- No long-lived GCP service-account JSON key is required by the workflow.
+- The deployment connection uses IAP tunneling and OS Login.
+
+### Privilege boundary
+
+The manually-triggered `.github/workflows/cd-auth-test.yml` verifies that the deployment identity is intentionally constrained:
+
+```text
+direct Docker socket access     DENIED
+sudo docker                     DENIED
+sudo shell                      DENIED
+trusted deploy command          ALLOWED
 ```
 
-If either request fails, the previous release is selected through a temporary symlink and moved over `current`. The script verifies the restored target and exits non-zero.
+The authorization test also checks that Docker is actually present before accepting a Docker failure as evidence of permission denial, avoiding a false-positive security test caused by a missing daemon/socket.
 
-This does not undo database writes. MySQL remains in the `fullstack_mysql_data` named volume, and database recovery is outside the frontend deployment transaction.
+### Artifact integrity and deployment scope
 
-## Controlled Rollback Test
+- Backend production images use immutable Git SHA tags.
+- The workflow never deploys `latest`.
+- `deploy` depends on successful `image-publish`.
+- Publish and deploy are restricted to pushes to `main`.
+- Pull requests can validate and build but cannot publish or deploy through the primary workflow.
+- The deployment identity is not expected to manage Docker directly; privileged operations are encapsulated in the trusted deployment entrypoint.
+- `.env` is excluded from Git and `.env.example` contains placeholders only.
+- MySQL is private to the Compose network.
 
-The preferred lab test introduces a controlled HTTP/API failure while keeping the backend process running. This validates the deployment failure branch without intentionally stopping the application service.
+## Failure Boundaries
 
-The exact failure-injection command depends on the active host Nginx configuration, which is external to this repository. Temporarily make the API check fail through the Nginx path, run the deployment, and then restore the normal route.
+Recovery is deliberately scoped rather than presented as universal rollback.
 
-Expected result:
+| Failure domain | Current recovery behavior |
+| --- | --- |
+| Frontend static release | Restore previous release symlink |
+| Backend container image | Restore previous backend image and re-check health |
+| MySQL application data | Not automatically rolled back |
+| Host Nginx configuration | Not automatically rolled back |
+| Host packages / OS state | Not automatically rolled back |
+| GCP / IAM configuration | Managed outside application rollback |
 
-1. The frontend build completes.
-2. A new release is created and activated.
-3. The controlled API request fails.
-4. The previous release is restored atomically.
-5. The deployment exits non-zero.
-6. The HTTP fault is removed.
-7. Frontend and API return healthy responses.
-
-The checked-in script implements the rollback branch. The HTTP fault injection is environment-specific because the Nginx configuration is not stored here.
-
-`docker compose stop backend` is not the default demonstration for this scenario. It remains a valid outage test, but it tests backend unavailability rather than an HTTP-layer controlled failure.
+This distinction matters: application deployment rollback is not the same as database disaster recovery or host recovery.
 
 ## Services and API
 
@@ -167,7 +321,7 @@ The API uses a MySQL pool, parameterized SQL queries, JSON request parsing, and 
 MySQL uses `mysql:9.7.2`. On first initialization, `mysql/init.sql` creates the `users` table, applies a unique email constraint, and inserts sample records.
 
 ```text
-fullstack_mysql_data --- /var/lib/mysql
+fullstack_mysql_data -> /var/lib/mysql
 ```
 
 `docker compose down` preserves the named volume. `docker compose down -v` removes it and deletes persisted project data.
@@ -180,42 +334,41 @@ phpMyAdmin uses `PMA_HOST=mysql` and `PMA_PORT=3306`. It is published only on `1
 
 ```text
 .
+|-- .github/
+|   `-- workflows/
+|       |-- ci.yml                    # PR CI, integration, image publish, auto-CD
+|       `-- cd-auth-test.yml          # WIF/IAP and privilege-boundary validation
 |-- backend/
 |   |-- Dockerfile
-|   |-- index.js                 # Process entry point and shutdown handling
+|   |-- index.js
 |   |-- package.json
 |   |-- package-lock.json
 |   `-- src/
-|       |-- app.js               # Express app and health endpoint
-|       |-- db.js                # MySQL pool factory
-|       |-- http.js              # Validation and error helpers
-|       `-- routes/users.js      # User CRUD routes
+|       |-- app.js
+|       |-- db.js
+|       |-- http.js
+|       `-- routes/users.js
 |-- frontend/
-|   |-- Dockerfile               # Retained image definition; not production path
+|   |-- Dockerfile                    # retained image definition; not production path
 |   |-- index.html
 |   |-- package.json
 |   |-- package-lock.json
 |   |-- vite.config.js
 |   `-- src/
-|       |-- api/users.js         # Browser API client
-|       |-- components/
-|       |   |-- UserForm.jsx
-|       |   `-- UserList.jsx
-|       |-- App.jsx
-|       |-- App.css
-|       |-- index.css
-|       `-- main.jsx
-|-- mysql/init.sql
-|-- scripts/deploy-frontend.sh
+|-- mysql/
+|   `-- init.sql
+|-- scripts/
+|   |-- deploy-backend.sh             # immutable image deployment + rollback logic
+|   `-- deploy-frontend.sh            # atomic static release + rollback logic
 |-- docker-compose.yml
 |-- .env.example
 |-- LICENSE
 `-- README.md
 ```
 
-Vite remains the frontend build tool and local development server. The production path uses `npm run build` and host-level Nginx; it does not use the Vite development server.
-
 ## Configuration
+
+Create the local environment file from the example:
 
 ```bash
 cp .env.example .env
@@ -227,21 +380,46 @@ cp .env.example .env
 | `MYSQL_DATABASE` | Application database name |
 | `MYSQL_USER` | Application database user |
 | `MYSQL_PASSWORD` | Application database password |
+| `BACKEND_IMAGE` | Backend image selected by Compose/deployment logic |
 
-The real `.env` file is ignored by Git. Use non-placeholder values outside source control. Compose supplies the backend with `PORT=3001`, `DB_HOST=mysql`, `DB_PORT=3306`, and credentials derived from this file.
+Use real non-placeholder values outside source control.
 
-## Operations
+## Local Development
 
-### Start services
+### Frontend
 
 ```bash
+cd frontend
+npm ci
+npm run dev
+npm run lint
+npm run build
+```
+
+### Backend
+
+```bash
+cd backend
+npm ci
+npm start
+```
+
+The backend expects its port and database connection environment variables to be available.
+
+### Compose
+
+```bash
+cp .env.example .env
+docker compose config
 docker compose up -d --build
 docker compose ps
 ```
 
-MySQL uses `mysqladmin ping` for readiness. Backend and phpMyAdmin depend on MySQL being `service_healthy`. The backend also has a container healthcheck against `/health`.
+## Host Operations
 
-### Configure Nginx
+### Nginx baseline
+
+The host Nginx configuration is external to this repository. The deployment model expects the equivalent of:
 
 ```nginx
 root /var/www/fullstack-compose/current;
@@ -255,22 +433,14 @@ location /api/ {
 }
 ```
 
+Validate and reload host Nginx after configuration changes:
+
 ```bash
 sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-### Deploy frontend
-
-```bash
-sudo mkdir -p /var/www/fullstack-compose/releases
-cd "$HOME/fullstack-compose"
-bash scripts/deploy-frontend.sh
-```
-
-An initial release and valid `current` symlink must exist before the first deployment. The script requires `npm`, `curl`, standard Linux symlink/rename utilities, and passwordless `sudo`.
-
-### Verify
+### Verify runtime
 
 ```bash
 readlink -f /var/www/fullstack-compose/current
@@ -278,222 +448,103 @@ test -s /var/www/fullstack-compose/current/index.html
 curl -fsS http://127.0.0.1/
 curl -fsS http://127.0.0.1/api/health
 curl -fsS http://127.0.0.1/api/users
+docker compose ps
 ```
 
-### Inspect releases and logs
+### Inspect logs
 
 ```bash
-ls -1 /var/www/fullstack-compose/releases
-ls -l /var/www/fullstack-compose/current*
 docker compose logs --tail=100 backend mysql phpmyadmin
 ```
 
-Release cleanup is not automated. Remove old releases only through a separately reviewed procedure.
+## Verified Lab Behavior
 
-### SSH access
+The following behaviors have been exercised rather than only documented as design goals:
 
-```bash
-ssh -N -L 8081:127.0.0.1:80 user@server
-```
+- A pull request ran `validate`, `integration`, and `image-build` successfully while `image-publish` and `deploy` were skipped.
+- After merge to `main`, all five primary pipeline jobs completed successfully.
+- The backend image was published under the merge commit SHA.
+- Auto-CD authenticated successfully through OIDC/WIF.
+- The runner established the deployment connection through IAP/OS Login.
+- The target host pulled the exact SHA-tagged GHCR image requested by the workflow.
+- The backend service was recreated and reached Docker health `healthy`.
+- Direct backend health, `/users`, and the Nginx `/api/health` path all passed after deployment.
+- The final running backend image matched the merge commit SHA requested by Auto-CD.
+- The privilege-boundary workflow confirmed that direct Docker, `sudo docker`, and `sudo` shell access were denied while the trusted deployment command was permitted.
+- Frontend controlled-failure testing exercised automatic restoration of the previous release pointer.
 
-Open `http://127.0.0.1:8081`. Forward phpMyAdmin separately when required:
+## Current Limitations
 
-```bash
-ssh -N -L 8080:127.0.0.1:8080 user@server
-```
+This lab intentionally does **not** describe itself as a fully hardened Internet-facing production service. Current gaps include:
 
-## Runbook
-
-### Normal deployment
-
-1. Confirm the Git revision to deploy.
-2. Confirm backend and MySQL health.
-3. Record the active release.
-4. Run `scripts/deploy-frontend.sh`.
-5. Review build, switch, and health output.
-6. Verify `/`, `/api/health`, and `/api/users`.
-7. Record the new release identifier.
-
-### Failed deployment
-
-1. Treat a non-zero script exit as a failed deployment.
-2. Read the first `ERROR:` line.
-3. Confirm `current` resolves inside `releases`.
-4. Inspect Nginx and backend logs.
-5. Verify frontend and API responses.
-6. Do not delete the failed release before investigation.
-7. Retry only after identifying the cause.
-
-### HTTP rollback test
-
-1. Use a maintenance window or isolated host.
-2. Record the active release.
-3. Introduce a temporary API-path failure at the HTTP/Nginx test boundary.
-4. Keep the backend process running.
-5. Run the frontend deployment script.
-6. Confirm the API check fails.
-7. Confirm `current` returns to the previous release.
-8. Confirm the command exits non-zero.
-9. Remove the temporary fault.
-10. Verify frontend and API health.
-
-The exact fault-injection command is environment-specific because the host Nginx configuration is external to this repository.
-
-### Database preservation
-
-```bash
-docker compose down
-docker compose up -d
-```
-
-The named volume is preserved. Adding `-v` is destructive for persisted project data.
-
-## Development
-
-### Frontend
-
-```bash
-cd frontend
-npm ci
-npm run dev
-npm run lint
-npm run build
-```
-
-`npm run dev` is local development only. `npm run build` creates the artifact consumed by the release script.
-
-### Backend
-
-```bash
-cd backend
-npm ci
-npm start
-```
-
-The backend expects `PORT`, `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD`.
-
-### Validation
-
-```bash
-bash -n scripts/deploy-frontend.sh
-docker compose config
-```
-
-The repository does not include a real automated test suite. The backend `test` script remains a placeholder.
-
-## Security
-
-Current baseline controls:
-
-- `.env` is excluded from Git.
-- `.env.example` contains placeholders only.
-- MySQL has no host port mapping.
-- Backend and phpMyAdmin bind to host loopback.
-- SSH forwarding can provide restricted remote access.
-- SQL values use parameter placeholders.
-- Release targets are validated under `releases`.
-- Deployment does not delete old releases or database volumes.
-
-Current limitations:
-
-- CORS is enabled broadly.
-- phpMyAdmin uses the `latest` image tag.
-- No TLS configuration is included.
-- No authentication or authorization is included.
-- No rate limiting is included.
-- No external secret manager is configured.
-- No backup/restore automation is included.
-- No centralized observability stack is included.
-
-These limitations prevent the repository from being described as a fully hardened Internet-facing production service.
-
-## Failure Boundaries
-
-The frontend script can roll back static release selection. It does not roll back the backend process, MySQL data, host Nginx configuration, or host package state.
-
-Automatic recovery is intentionally scoped to the frontend release pointer.
+- no TLS configuration stored in this repository
+- no application authentication or authorization
+- broad CORS policy
+- no rate limiting
+- phpMyAdmin still uses a mutable `latest` image tag
+- no external managed secret manager
+- no centralized metrics/logging/alerting stack in this repository
+- no automated database backup/restore pipeline
+- no full backend unit/integration test suite beyond the service-level CI checks
+- no frontend component or end-to-end test suite
+- no deployment concurrency/serialization protection yet
+- no image vulnerability scan, SBOM, or signing/attestation stage yet
+- no canary or multi-instance traffic-shifting strategy
 
 ## Roadmap
 
-The following are future improvements, not current capabilities:
+Next improvements are intentionally separated from completed capabilities:
 
-- CI checks for frontend build, lint, Compose syntax, and shell syntax.
-- Backend API tests and frontend component tests.
-- Pin phpMyAdmin to a reviewed image version.
-- Stronger request validation and error contracts.
-- Authentication and authorization.
-- TLS and managed secret storage.
-- Metrics, logs, alerting, and deployment observability.
-- Release retention and explicit cleanup tooling.
-- Database backup, restore, and recovery validation.
-- Blue-green backend deployment evaluation.
-- Canary traffic evaluation for multi-instance deployments.
-- Runtime screenshots under `docs/images/` after capture from the lab.
+1. Add deployment concurrency protection to prevent overlapping production deploys.
+2. Move workflow permissions toward tighter per-job least privilege where practical.
+3. Add backend automated tests and frontend component/E2E tests.
+4. Add container vulnerability scanning and generate an SBOM.
+5. Pin mutable third-party image tags to reviewed versions/digests.
+6. Add managed secret storage and document credential rotation.
+7. Add TLS and hardened Internet-facing ingress controls if the lab is exposed publicly.
+8. Add metrics, logs, deployment observability, and alerting.
+9. Automate database backup plus restore verification drills.
+10. Evaluate blue-green or canary backend deployment only after a multi-instance architecture exists.
 
 ## Portfolio Highlights
 
-This repository demonstrates:
+The strongest signals in this repository are operational rather than CRUD complexity:
 
-- React static build and artifact-based deployment.
-- Host-level Nginx as the application entry point.
-- Path-based routing for static assets and API traffic.
-- Express CRUD API backed by MySQL.
-- Docker Compose orchestration.
-- Health-aware database dependencies.
-- Private database networking.
-- Persistent named-volume storage.
-- Timestamped frontend releases.
-- Atomic symlink activation.
-- Post-deploy frontend and API checks.
-- Automatic frontend rollback.
-- Controlled HTTP-layer rollback validation in the lab.
-- Explicit separation between frontend rollback and database recovery.
+- **CI discipline:** pull requests must pass validation, integration, and image-build stages before merge.
+- **Artifact traceability:** production backend artifacts are identified by the exact Git SHA.
+- **Environment gating:** pull requests cannot publish or deploy through the main pipeline.
+- **Short-lived cloud authentication:** GitHub OIDC + Google Workload Identity Federation removes the need for a long-lived GCP key in the workflow.
+- **Least privilege:** the deployment identity is denied general Docker and shell escalation and is routed through a narrow trusted deploy command.
+- **Health-aware delivery:** deployment success requires container health plus direct and reverse-proxy HTTP checks.
+- **Rollback design:** frontend and backend each have explicit recovery paths with documented failure boundaries.
+- **Operational clarity:** immutable backend releases and timestamped frontend releases make the running version auditable.
 
-The strongest portfolio signal is the operational design around repeatable release creation, atomic activation, health validation, and recovery under controlled failure.
+## Interview Talking Points
 
-## Interview Summary
+### Why use Git SHA image tags instead of `latest`?
 
-### Why static frontend deployment?
+A Git SHA creates a direct relationship between source revision, published image, and deployed artifact. It also makes rollback and incident analysis more deterministic because the tag is immutable by convention in this workflow.
 
-The compiled frontend is a static artifact. Serving it directly through host Nginx removes an unnecessary production process and gives deployment a clear artifact boundary.
+### Why OIDC / Workload Identity Federation?
 
-### Is this blue-green deployment?
+The workflow can obtain short-lived Google credentials from GitHub's workload identity instead of storing a long-lived service-account JSON key in GitHub Secrets. This reduces secret-management and credential-rotation exposure.
 
-The frontend has a blue-green-like pointer switch, but the repository does not implement two live environments or traffic splitting. The accurate term is atomic release deployment with automatic rollback.
+### Why not give the deploy identity Docker access?
 
-### Is this zero-downtime deployment?
+Direct Docker access is effectively highly privileged on a Docker host. The lab instead validates that direct Docker and broad sudo access are denied, then permits only a reviewed deployment entrypoint with a strict SHA argument.
 
-The repository demonstrates atomic frontend activation on one host. It does not prove multi-node zero-downtime behavior, backend blue-green deployment, or canary routing.
+### Is the frontend deployment blue-green?
 
-### What does health validation prove?
+No. It uses blue-green-like pointer switching, but there are not two independently live traffic environments. The accurate description is **atomic release deployment with automatic rollback**.
 
-It proves basic frontend and API availability after activation. The API health endpoint also checks a simple MySQL query. These checks do not prove full business correctness, capacity, or resilience under load.
+### Is the backend deployment blue-green?
 
-## Evidence Map
+No. The current backend deployment recreates the single backend service with the selected immutable image. A true blue-green or canary strategy would require multiple concurrently available backend instances and controlled traffic switching.
 
-| Evidence | Location | Demonstrated behavior |
-| --- | --- | --- |
-| Static build | `frontend/package.json` | `npm run build` invokes Vite |
-| Release deployment | `scripts/deploy-frontend.sh` | Build copied to timestamped directory |
-| Atomic activation | `scripts/deploy-frontend.sh` | `current.next` moved over `current` |
-| Automatic rollback | `scripts/deploy-frontend.sh` | Failed checks restore old release |
-| API health | `backend/src/app.js` | MySQL query validates dependency |
-| API CRUD | `backend/src/routes/users.js` | User CRUD routes |
-| Compose readiness | `docker-compose.yml` | Services depend on MySQL health |
-| Persistence | `docker-compose.yml` | Named volume backs MySQL data |
+### Does rollback restore database state?
 
-## Documentation Maintenance
-
-Update this README when service boundaries, ports, environment variables, deployment stages, or rollback behavior change.
-
-Do not describe the Vite development server as production runtime.
-
-Do not describe the removed frontend Compose service as active.
-
-Do not describe a manual rollback test as CI automation.
-
-Keep recruiter-facing claims tied to checked-in files or recorded lab evidence.
+No. Backend and frontend rollback restore application/runtime versions only. MySQL data recovery is intentionally treated as a separate operational concern.
 
 ## License
 
-This project is licensed under the [Apache License 2.0](LICENSE).
+Licensed under the [Apache License 2.0](LICENSE).

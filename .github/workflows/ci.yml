@@ -11,6 +11,7 @@ on:
 permissions:
   contents: read
   packages: write
+  id-token: write
 
 jobs:
   validate:
@@ -187,3 +188,32 @@ jobs:
             backend
 
           docker push "$IMAGE"
+
+  deploy:
+    needs: image-publish
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/487124860968/locations/global/workloadIdentityPools/github-actions/providers/github
+          service_account: github-deploy@devopslab-504414.iam.gserviceaccount.com
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy backend
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Deploying backend SHA: ${GITHUB_SHA}"
+
+          gcloud compute ssh devops-recovery \
+            --project=devopslab-504414 \
+            --zone=asia-southeast1-c \
+            --tunnel-through-iap \
+            --quiet \
+            --command="sudo -n /usr/local/sbin/fullstack-deploy-backend ${GITHUB_SHA}"

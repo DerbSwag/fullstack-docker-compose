@@ -486,6 +486,77 @@ The following behaviors have been exercised rather than only documented as desig
 - The final running backend image matched the merge commit SHA requested by Auto-CD.
 - The privilege-boundary workflow confirmed that direct Docker, `sudo docker`, and `sudo` shell access were denied while the trusted deployment command was permitted.
 - Frontend controlled-failure testing exercised automatic restoration of the previous release pointer.
+- Google Cloud Ops Agent guest telemetry was validated after resolving IAM writer-role authorization failures.
+- Cloud Monitoring displayed CPU, memory, network, disk-space, and disk-throughput data for the lab VM.
+- Cloud Logging ingestion was validated with a controlled guest `logger` test message.
+
+
+## GCP Ops Agent Telemetry Incident
+
+A controlled observability troubleshooting exercise was completed on the Google Cloud deployment VM.
+
+### Symptom
+
+The Google Cloud Ops Agent was installed and its logging and metrics sub-agents were running, but guest telemetry was not appearing in Cloud Monitoring or Cloud Logging. Compute Engine platform metrics such as CPU and network traffic were visible, while guest metrics such as memory and filesystem utilization were missing.
+
+### Investigation
+
+The troubleshooting path was evidence-led:
+
+1. Verified the Ops Agent package and service state.
+2. Confirmed the Fluent Bit logging sub-agent and OpenTelemetry metrics collector were running.
+3. Confirmed the agent's port and network startup checks passed.
+4. Inspected the Ops Agent startup logs instead of reinstalling the agent.
+5. Identified IAM authorization failures for the VM's attached service account.
+
+The agent reported that the VM service account was missing:
+
+- `roles/monitoring.metricWriter`
+- `roles/logging.logWriter`
+
+### Root Cause
+
+The Ops Agent itself was healthy, but the Compute Engine VM service account did not have the minimum writer roles required to publish guest metrics and logs.
+
+This was an IAM authorization issue, not an agent installation or network-connectivity failure.
+
+### Fix
+
+Granted only the required project-level roles to the VM service account:
+
+- **Monitoring Metric Writer**
+- **Logs Writer**
+
+The existing CI/CD deployment identity remained separate from the VM runtime identity. This preserves a clearer privilege boundary between GitHub-driven deployment access and VM telemetry publishing.
+
+After IAM propagation, the Ops Agent was restarted.
+
+### Validation
+
+Validation was performed at multiple layers:
+
+- Ops Agent port check: **PASS**
+- Ops Agent network check: **PASS**
+- Google API authorization check: **PASS**
+- Cloud Monitoring displayed guest **memory** and **disk-space** utilization in addition to CPU/network metrics.
+- A controlled test message generated with `logger` was successfully found in **Cloud Logging Logs Explorer**.
+
+This exercise demonstrates a practical troubleshooting flow:
+
+```text
+symptom
+  -> verify agent processes
+  -> inspect startup logs
+  -> isolate IAM authorization
+  -> apply least-privilege writer roles
+  -> restart
+  -> validate metrics and guest-log ingestion
+```
+
+### Public Evidence
+
+Sanitized screenshots were prepared separately for the portfolio. Public evidence removes or masks account identifiers, project-specific identifiers, VM/host names, IP addresses, and other environment metadata while preserving the monitoring and logging outcome.
+
 
 ## Current Limitations
 
@@ -497,7 +568,7 @@ This lab intentionally does **not** describe itself as a fully hardened Internet
 - no rate limiting
 - phpMyAdmin still uses a mutable `latest` image tag
 - no external managed secret manager
-- no centralized metrics/logging/alerting stack in this repository
+- host-level Google Cloud Monitoring/Logging is now validated with Ops Agent; application-level dashboards, log-based alerts, and broader alert routing are still incomplete
 - no automated database backup/restore pipeline
 - no full backend unit/integration test suite beyond the service-level CI checks
 - no frontend component or end-to-end test suite
@@ -516,7 +587,7 @@ Next improvements are intentionally separated from completed capabilities:
 5. Pin mutable third-party image tags to reviewed versions/digests.
 6. Add managed secret storage and document credential rotation.
 7. Add TLS and hardened Internet-facing ingress controls if the lab is exposed publicly.
-8. Add metrics, logs, deployment observability, and alerting.
+8. Extend validated host telemetry into application-level metrics/logging, deployment observability, uptime checks, and alerting.
 9. Automate database backup plus restore verification drills.
 10. Evaluate blue-green or canary backend deployment only after a multi-instance architecture exists.
 

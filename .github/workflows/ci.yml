@@ -10,12 +10,12 @@ on:
 
 permissions:
   contents: read
-  packages: write
-  id-token: write
 
 jobs:
   validate:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     env:
       BACKEND_IMAGE: fullstack-backend:ci
@@ -65,9 +65,13 @@ jobs:
           path: frontend/dist/
           if-no-files-found: error
 
-  integration:
+  build-test:
     needs: validate
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      artifact_attempt: ${{ steps.handoff.outputs.run_attempt }}
 
     env:
       MYSQL_ROOT_PASSWORD: ci_root_password
@@ -80,7 +84,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build backend image from PR source
+      - name: Build backend image once
         run: |
           docker build \
             --file backend/Dockerfile \
@@ -129,6 +133,44 @@ jobs:
           curl --fail --show-error --silent \
             http://127.0.0.1:3001/users
 
+      - name: Inspect tested backend image
+        run: docker image inspect fullstack-backend:ci
+
+      - name: Save tested image and metadata for main push
+        id: handoff
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          mkdir -p handoff
+
+          docker image inspect fullstack-backend:ci --format '{{.Id}}' > handoff/image-id.txt
+          docker image inspect fullstack-backend:ci --format '{{.Os}}/{{.Architecture}}' > handoff/platform.txt
+          docker save --output handoff/backend-image.tar fullstack-backend:ci
+          sha256sum handoff/backend-image.tar > handoff/backend-image.tar.sha256
+
+          jq -n \
+            --arg source_sha "$SOURCE_SHA" \
+            --arg run_id "$RUN_ID" \
+            --arg run_attempt "$RUN_ATTEMPT" \
+            --arg platform "$(cat handoff/platform.txt)" \
+            --arg image_id "$(cat handoff/image-id.txt)" \
+            '{source_sha:$source_sha,run_id:$run_id,run_attempt:$run_attempt,platform:$platform,image_id:$image_id}' \
+            > handoff/metadata.json
+          echo "run_attempt=$RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+
+      - name: Upload tested backend image artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-image-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: handoff/
+          if-no-files-found: error
+          retention-days: 3
+
       - name: Show logs on failure
         if: failure()
         run: docker compose logs mysql backend
@@ -137,37 +179,77 @@ jobs:
         if: always()
         run: docker compose down -v
 
-  image-build:
-    needs: integration
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Build backend Docker image
-        run: |
-          docker build \
-            --file backend/Dockerfile \
-            --tag fullstack-backend:ci \
-            backend
-
-      - name: Inspect backend Docker image
-        run: |
-          docker image inspect fullstack-backend:ci
-
-      - name: Show backend image
-        run: |
-          docker image ls fullstack-backend:ci
-
   image-publish:
-    needs: image-build
+    needs: build-test
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      actions: read
+      packages: write
+    outputs:
+      digest: ${{ steps.publish.outputs.digest }}
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      # Fail closed when only image-publish is rerun: build-test must emit an artifact for this attempt.
+      - name: Require build artifact from current workflow attempt
+        env:
+          BUILD_ARTIFACT_ATTEMPT: ${{ needs['build-test'].outputs.artifact_attempt }}
+          CURRENT_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$BUILD_ARTIFACT_ATTEMPT" || "$BUILD_ARTIFACT_ATTEMPT" != "$CURRENT_ATTEMPT" ]]; then
+            echo "::error::No build artifact was produced by build-test for this workflow attempt. Rerun the full workflow."
+            exit 1
+          fi
+
+      - name: Download tested backend image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-image-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: handoff/
+
+      - name: Verify artifact integrity and metadata
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          EXPECTED_PLATFORM: linux/amd64
+        run: |
+          set -euo pipefail
+
+          test -s handoff/backend-image.tar
+          test -s handoff/backend-image.tar.sha256
+          test -s handoff/metadata.json
+          test -s handoff/platform.txt
+
+          EXPECTED_CHECKSUM="$(awk 'NR == 1 { print $1 }' handoff/backend-image.tar.sha256)"
+          ACTUAL_CHECKSUM="$(sha256sum handoff/backend-image.tar | awk '{ print $1 }')"
+          [[ "$EXPECTED_CHECKSUM" =~ ^[[:xdigit:]]{64}$ ]]
+          [[ "$ACTUAL_CHECKSUM" == "$EXPECTED_CHECKSUM" ]]
+          [[ "$(tr -d '\r\n' < handoff/platform.txt)" == "$EXPECTED_PLATFORM" ]]
+
+          jq -e \
+            --arg source_sha "$SOURCE_SHA" \
+            --arg run_id "$RUN_ID" \
+            --arg run_attempt "$RUN_ATTEMPT" \
+            --arg platform "$EXPECTED_PLATFORM" \
+            '.source_sha == $source_sha
+              and .run_id == $run_id
+              and .run_attempt == $run_attempt
+              and .platform == $platform
+              and (.image_id | test("^sha256:[0-9a-f]{64}$"))' \
+            handoff/metadata.json > /dev/null
+
+      - name: Load and verify tested backend image
+        run: |
+          set -euo pipefail
+          docker load --input handoff/backend-image.tar
+
+          EXPECTED_IMAGE_ID="$(jq -r '.image_id' handoff/metadata.json)"
+          LOADED_IMAGE_ID="$(docker image inspect fullstack-backend:ci --format '{{.Id}}')"
+          LOADED_PLATFORM="$(docker image inspect fullstack-backend:ci --format '{{.Os}}/{{.Architecture}}')"
+          test "$LOADED_IMAGE_ID" = "$EXPECTED_IMAGE_ID"
+          test "$LOADED_PLATFORM" = "linux/amd64"
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -176,21 +258,27 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push backend image
+      - name: Retag and push tested backend image
+        id: publish
         run: |
+          set -euo pipefail
           IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/fullstack-backend:${GITHUB_SHA}"
 
-          echo "Building: $IMAGE"
+          docker image tag fullstack-backend:ci "$IMAGE"
+          if ! PUSH_OUTPUT="$(docker push "$IMAGE" 2>&1)"; then
+            echo "Docker push failed; command output suppressed."
+            exit 1
+          fi
 
-          docker build \
-            --file backend/Dockerfile \
-            --tag "$IMAGE" \
-            backend
-
-          docker push "$IMAGE"
+          DIGEST="$(printf '%s\n' "$PUSH_OUTPUT" | grep -Eo 'digest: sha256:[0-9a-f]{64}' | tail -n 1 | awk '{ print $2 }')"
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "Published image digest: $DIGEST"
 
   deploy:
     needs: image-publish
+    permissions:
+      id-token: write
     concurrency:
       group: production-backend
       cancel-in-progress: false

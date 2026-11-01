@@ -16,7 +16,7 @@ function createApp({ pool }) {
       res.status(500).json({
         status: "error",
         database: "disconnected",
-        message: error.message,
+        message: "dependency unavailable",
       });
     }
   });

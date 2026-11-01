@@ -10,8 +10,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
-  id-token: write
 
 jobs:
   validate:
@@ -119,6 +117,16 @@ jobs:
           docker compose logs mysql backend
           exit 1
 
+      - name: Verify backend runs as non-root
+        shell: bash
+        run: |
+          set -euo pipefail
+          USER_CONFIG="$(docker inspect --format '{{.Config.User}}' fullstack-backend)"
+          test "$USER_CONFIG" = "node"
+          USER_ID="$(docker exec fullstack-backend node -p 'process.getuid()')"
+          test "$USER_ID" -ne 0
+          echo "Backend runs as non-root UID: $USER_ID"
+
       - name: Check backend health endpoint
         run: |
           curl --fail --show-error --silent \
@@ -161,6 +169,9 @@ jobs:
           docker image ls fullstack-backend:ci
 
   image-publish:
+    permissions:
+      contents: read
+      packages: write
     needs: image-build
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -190,6 +201,9 @@ jobs:
           docker push "$IMAGE"
 
   deploy:
+    permissions:
+      contents: read
+      id-token: write
     needs: image-publish
     concurrency:
       group: production-backend

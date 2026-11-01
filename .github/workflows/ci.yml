@@ -10,8 +10,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
-  id-token: write
 
 jobs:
   validate:
@@ -161,6 +159,9 @@ jobs:
           docker image ls fullstack-backend:ci
 
   image-publish:
+    permissions:
+      contents: read
+      packages: write
     needs: image-build
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -190,6 +191,9 @@ jobs:
           docker push "$IMAGE"
 
   deploy:
+    permissions:
+      contents: read
+      id-token: write
     needs: image-publish
     concurrency:
       group: production-backend

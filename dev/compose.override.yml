@@ -1,0 +1,84 @@
+services:
+  mysql:
+    command: [bash, -ec, "cp /opt/codex-dev/init.sql /docker-entrypoint-initdb.d/01-init.sql; chmod 0444 /docker-entrypoint-initdb.d/01-init.sql; exec docker-entrypoint.sh mysqld"]
+    container_name: ${CODEX_DEV_PROJECT}-mysql
+    image: mysql:9.7.2@sha256:79b171dd2361300260ebceb30bb1c669fa8f70183ae250773b56b62d9031338b
+    platform: linux/amd64
+    restart: "no"
+    environment: !override
+      MYSQL_ROOT_PASSWORD: dev_root_only
+      MYSQL_DATABASE: fullstack
+      MYSQL_USER: dev_app
+      MYSQL_PASSWORD: dev_app_only
+    volumes: !override
+      - fullstack_mysql_data:/var/lib/mysql
+      - ./mysql/init.sql:/opt/codex-dev/init.sql:ro
+    networks: !override [fullstack-network]
+    ports: !override []
+    healthcheck:
+      test: [CMD-SHELL, 'MYSQL_PWD=$$MYSQL_PASSWORD mysql -h 127.0.0.1 -u dev_app fullstack -e "SELECT id FROM users LIMIT 1"']
+  backend:
+    container_name: ${CODEX_DEV_PROJECT}-backend
+    image: ${CODEX_DEV_PROJECT}-backend:${CODEX_DEV_SHA}
+    platform: linux/amd64
+    restart: "no"
+    build:
+      context: ./backend
+      dockerfile: ../dev/backend.Dockerfile
+      secrets: [proxy_ca]
+      labels:
+        org.opencontainers.image.revision: ${CODEX_DEV_SHA}
+    environment: !override
+      PORT: "3001"
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_NAME: fullstack
+      DB_USER: dev_app
+      DB_PASSWORD: dev_app_only
+    ports: !override []
+    networks: !override [fullstack-network]
+  frontend:
+    container_name: ${CODEX_DEV_PROJECT}-frontend
+    image: ${CODEX_DEV_PROJECT}-frontend:${CODEX_DEV_SHA}
+    platform: linux/amd64
+    restart: "no"
+    build:
+      context: ./frontend
+      dockerfile: ../dev/frontend.Dockerfile
+      secrets: [proxy_ca]
+      labels:
+        org.opencontainers.image.revision: ${CODEX_DEV_SHA}
+    environment:
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      ALL_PROXY: ""
+      NO_PROXY: "*"
+    ports: ["127.0.0.1:${CODEX_DEV_FRONTEND_PORT:-3000}:3000"]
+    volumes:
+      - ./dev/vite.config.mjs:/opt/codex-dev/vite.config.mjs:ro
+      - ./dev/test-stack.mjs:/opt/codex-dev/test-stack.mjs:ro
+    networks: [fullstack-network, dev-ingress]
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  phpmyadmin: !reset null
+volumes:
+  fullstack_mysql_data:
+    name: ${CODEX_DEV_PROJECT}-mysql-data
+networks:
+  fullstack-network:
+    name: ${CODEX_DEV_PROJECT}-network
+    internal: true
+  # Frontend-only ingress: intentionally grants frontend an outbound route.
+  dev-ingress:
+    name: ${CODEX_DEV_PROJECT}-ingress
+    driver: bridge
+    internal: false
+secrets:
+  proxy_ca:
+    file: ${CODEX_DEV_CA}
